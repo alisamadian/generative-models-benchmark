@@ -218,3 +218,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# ---------------------------------------------------------------------------
+# Generative Models Benchmark specific exclusions (Section 0 Rule 7 & Section 18)
+# Never commit checkpoints, raw datasets, cached FID features, or Drive mounts
+# ---------------------------------------------------------------------------
+data/
+drive_cache/
+checkpoints/
+fid_stats/
+samples/
+logs/
+*.pt
+*.pth
+*.ckpt
+*.tmp*
+Generative_Models_Benchmark_Spec.docx
+Generative_Models_Benchmark_Spec.pdf

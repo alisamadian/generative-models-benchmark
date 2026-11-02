@@ -1,0 +1,11 @@
+# Core dependencies (Section 3 of Generative Models Benchmark Specification)
+# Pin exact versions after the first full Colab run; versions are also recorded
+# automatically inside every results/*.json file.
+torch>=2.1.0
+torchvision>=0.16.0
+torch-fidelity>=0.3.0
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+tqdm>=4.65.0
+
