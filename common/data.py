@@ -105,8 +105,23 @@ def load_raw(
         x_te = te.data.unsqueeze(1).to(dtype=torch.uint8).contiguous()
         y_te = te.targets.to(dtype=torch.int64).contiguous()
     elif dataset == "cifar10":
-        tr = tv_datasets.CIFAR10(root=str(root), train=True, download=True)
-        te = tv_datasets.CIFAR10(root=str(root), train=False, download=True)
+        # Use high-speed Hugging Face CDN mirror first instead of throttled cs.toronto.edu (~45 kB/s).
+        # torchvision still enforces its built-in MD5 checksum (c58f30108f718f92721af3b95e74349a).
+        orig_url = tv_datasets.CIFAR10.url
+        fast_mirror = (
+            "https://huggingface.co/datasets/xingslong/cifar-10-batches-py/"
+            "resolve/main/cifar-10-python.tar.gz"
+        )
+        try:
+            tv_datasets.CIFAR10.url = fast_mirror
+            tr = tv_datasets.CIFAR10(root=str(root), train=True, download=True)
+            te = tv_datasets.CIFAR10(root=str(root), train=False, download=True)
+        except Exception:
+            tv_datasets.CIFAR10.url = orig_url
+            tr = tv_datasets.CIFAR10(root=str(root), train=True, download=True)
+            te = tv_datasets.CIFAR10(root=str(root), train=False, download=True)
+        finally:
+            tv_datasets.CIFAR10.url = orig_url
         # tr.data is (50000, 32, 32, 3) numpy uint8 -> transpose to (N, 3, 32, 32)
         x_tr = (
             torch.from_numpy(tr.data)
