@@ -578,7 +578,7 @@ def load_chosen_hparams(
     dataset: str,
     model_name: str,
     chosen_dir: Union[str, Path] = "./results/chosen",
-    auto_create_default: bool = True,
+    auto_create_default: bool = False,
 ) -> Dict[str, Any]:
     """Load frozen hyperparameters before a final run (Section 6.2 Rule 8).
 
