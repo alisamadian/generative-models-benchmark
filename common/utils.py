@@ -439,6 +439,27 @@ def mount_drive(base_subdir: str = "generative-benchmark") -> Dict[str, Path]:
     }
     for key in ("root", "checkpoints", "fid_stats", "samples", "logs"):
         paths[key].mkdir(parents=True, exist_ok=True)
+
+    # On Colab, automatically sync persistent splits/, results/, and figures/ from Drive
+    # into the local workspace so switching notebooks or sessions never loses progress.
+    if in_colab:
+        for rel_dir in (
+            "splits",
+            "results/tuning",
+            "results/chosen",
+            "results/final",
+            "figures",
+        ):
+            drive_dir = root / rel_dir
+            local_dir = Path.cwd() / rel_dir
+            drive_dir.mkdir(parents=True, exist_ok=True)
+            local_dir.mkdir(parents=True, exist_ok=True)
+            for src_file in drive_dir.glob("*"):
+                if src_file.is_file() and src_file.name != ".gitkeep":
+                    dst_file = local_dir / src_file.name
+                    if not dst_file.exists():
+                        shutil.copy2(src_file, dst_file)
+
     return paths
 
 
@@ -481,5 +502,17 @@ def write_results_json(
     with open(tmp_path, mode="w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, sort_keys=False)
     os.replace(tmp_path, out_path)
+
+    # Mirror results JSON to Google Drive on Colab so it persists across sessions
+    drive_root = Path("/content/drive/MyDrive/generative-benchmark")
+    if drive_root.exists():
+        try:
+            rel = out_path.resolve().relative_to(Path.cwd().resolve())
+            drive_dest = drive_root / rel
+            drive_dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(out_path, drive_dest)
+        except ValueError:
+            pass
+
     return out_path
 
