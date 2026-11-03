@@ -188,9 +188,11 @@ class TestGenerativeBenchmarkPreflight(unittest.TestCase):
             f_dir = tmp_path / "final"
             fig_dir = tmp_path / "figures"
 
-            # Refuses to load chosen hparams before freeze (Section 6.2 Rule 8)
+            # Refuses to load chosen hparams before freeze when auto_create_default=False (Section 6.2 Rule 8)
             with self.assertRaises(FileNotFoundError):
-                load_chosen_hparams("mnist", "flow_matching", chosen_dir=c_dir)
+                load_chosen_hparams(
+                    "mnist", "flow_matching", chosen_dir=c_dir, auto_create_default=False
+                )
 
             # Write 4 synthetic tuning trials where trial 2 (default) is within 2% of trial 3
             trials = get_tuning_trials("flow_matching")

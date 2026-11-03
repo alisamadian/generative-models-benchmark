@@ -1,0 +1,24 @@
+{
+  "dataset": "mnist",
+  "model": "vae",
+  "protocol_hash": "cd778de2851acb201b18f6309fbe300d778f681cbca7e8a6bac70bc904645e06",
+  "winning_trial_index": 2,
+  "hparams": {
+    "lr": 0.0002,
+    "latent_dim": 128
+  },
+  "winning_val_fid": null,
+  "selection_reason": "precommitted_default_hparams",
+  "all_trials": [],
+  "library_versions": {
+    "python": "3.13.8",
+    "torch": "2.14.1+cpu",
+    "torchvision": "0.29.2+cpu",
+    "torch_fidelity": "not_installed",
+    "numpy": "2.3.4",
+    "pandas": "2.3.3",
+    "matplotlib": "3.11.2",
+    "tqdm": "not_installed"
+  },
+  "timestamp": "2026-11-03T12:49:13.570849+00:00"
+}

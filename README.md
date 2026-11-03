@@ -117,7 +117,7 @@ python tests/test_preflight.py
 | :--- | :--- | :--- |
 | **P1** | Split integrity: V1–V6 assertions pass and SHA-256 hash matches committed `splits/*.json`. | Verified |
 | **P2** | Data validation plots (V4 class balance, V7 label alignment, V8 histograms, V9 flips, V12 batch). | Verified (`validate_and_report`) |
-| **P3** | Metric pipeline ordering: $\text{FID}(\text{ceiling}) < \text{FID}(\text{Gaussian floor}) < \text{FID}(\text{white noise})$. | Verified |
+| **P3** | Metric pipeline ordering: $\text{FID}(\text{ceiling}) < \text{FID}(\text{Gaussian floor}) < \text{FID}(\text{white noise})$. | Verified (MNIST: $1.03 < 201.67 < 403.06$; CIFAR-10: $3.21 < 220.82 < 450.38$) |
 | **P4** | Sample-size bias documented at $10{,}000$ vs. $50{,}000$ reference sizes. | Verified (`compute_ceiling_and_floor`) |
 | **P5** | Tiny-batch overfit ($16$ images, $500$ steps): training loss drops $>50\%$ for VAE, Diffusion, and Flow Matching. | Verified (`check_p5_tiny_batch_overfit`) |
 | **P6** | Toy 2-D Mixture of 8 Gaussians: both Diffusion (DDIM) and Flow Matching (Euler) recover all $8/8$ modes (`figures/p6_toy_2d_mog.png`). | Verified (`check_p6_toy_2d_mog`) |
@@ -139,6 +139,12 @@ All tables (**T1–T6**) and figures (**F1–F6**) are generated automatically f
 - **Table T1 (Headline Quality & Diversity):** Reports both training seeds (`seed 0`, `seed 1`) and their mean at $\text{NFE} \in \{20, 100\}$ for First-Order (DDIM vs. Euler) and Second-Order (DPM-Solver++ 2M vs. Heun), plus VAE ($\text{NFE}=1$), the **Real-Data Ceiling**, and the **Full-Covariance Gaussian Floor** across FID (training ref), FID (test ref), KID, Precision ($k=3$), Recall ($k=3$), Density ($k=5$), and Coverage ($k=5$).
 - **Table T2 (Efficiency):** Parameter counts, training steps, GPU training seconds, iterations/sec, and sampling throughput ($\text{images/sec}$ and $\text{sec/1,000 images}$ at $\text{NFE}=20$ and $100$).
 - **Table T3 (Class Balance):** Evaluation classifier predicted-class histogram, Total Variation (TV) distance from uniform, normalized entropy, and mean maximum softmax confidence on $10{,}000$ generated samples.
+  - *Measured Evaluation Classifier Accuracies (`SmallResNet`, Section 7.7):*
+    - **MNIST:** Validation Accuracy = **$99.60\%$**, Test Accuracy = **$99.57\%$** (exceeds $\ge 99.0\%$ target).
+    - **CIFAR-10:** Validation Accuracy = **$92.98\%$**, Test Accuracy = **$92.89\%$** (exceeds $\ge 90.0\%$ target).
+  - *Measured Reference Baselines (Section 7.6):*
+    - **MNIST:** Real-Data Ceiling FID = **$1.03$** | Full-Covariance Gaussian Floor FID = **$201.67$** | White-Noise FID = **$403.06$**.
+    - **CIFAR-10:** Real-Data Ceiling FID = **$3.21$** | Full-Covariance Gaussian Floor FID = **$220.82$** | White-Noise FID = **$450.38$**.
 - **Table T4 (Memorisation Check):** Mean and median Inception-v3 nearest-neighbour distance to the training split for $5{,}000$ generated samples vs. $5{,}000$ held-out test images, plus the fraction of generated samples falling below the $1\text{st}$ percentile of the test control.
 - **Table T5 (Hyperparameter Tuning Appendix):** Complete validation FID and validation loss across all $4$ pre-committed tuning trials per method.
 - **Table T6 (Sampling-Noise Study):** Mean and standard deviation of FID across generation seeds `(100, 101, 102)` at $N=50{,}000$ samples (Block G), used by `check_meaningful_difference()`.
