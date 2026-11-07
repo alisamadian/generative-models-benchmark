@@ -230,7 +230,9 @@ checkpoints/
 fid_stats/
 samples/
 logs/
+runs/*/checkpoints/
 *.pt
+!setup_artifacts/*.pt
 *.pth
 *.ckpt
 *.tmp*

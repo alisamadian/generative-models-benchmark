@@ -170,29 +170,45 @@ class TestGenerativeBenchmarkPreflight(unittest.TestCase):
         self.assertTrue(res["passed"])
 
     def test_tuning_freeze_write_once_and_comparison_tables(self) -> None:
-        """Section 6.2 Rule 2 & 8, Section 9, Section 10.3, Section 12.3."""
+        """Section 6.2 Rule 2 & 8, Section 9, Section 12.3, and portable run folders."""
         import tempfile
-        from common.runner import (
-            build_comparison_tables_and_figures,
-            check_meaningful_difference,
+        from common.tables import build_comparison_tables_and_figures
+        from common.tuning import (
             freeze_chosen_hparams,
             get_tuning_trials,
             load_chosen_hparams,
         )
-        from common.utils import write_results_json
+        from common.utils import get_run_dir, write_results_json
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             t_dir = tmp_path / "tuning"
             c_dir = tmp_path / "chosen"
             f_dir = tmp_path / "final"
+            runs_dir = tmp_path / "runs"
             fig_dir = tmp_path / "figures"
+
+            # Verify get_run_dir creates portable run folder structure
+            run_paths = get_run_dir("mnist", "flow_matching", seed=42, runs_root=runs_dir)
+            self.assertTrue(run_paths["checkpoints"].exists())
+            self.assertTrue(run_paths["figures"].exists())
+            self.assertTrue(run_paths["logs"].exists())
+            self.assertTrue(run_paths["tuning"].exists())
 
             # Refuses to load chosen hparams before freeze when auto_create_default=False (Section 6.2 Rule 8)
             with self.assertRaises(FileNotFoundError):
                 load_chosen_hparams(
                     "mnist", "flow_matching", chosen_dir=c_dir, auto_create_default=False
                 )
+
+            # Auto-creates default hparams when auto_create_default=True
+            auto_def = load_chosen_hparams(
+                "mnist",
+                "flow_matching",
+                chosen_path_override=run_paths["tuning"] / "chosen.json",
+                auto_create_default=True,
+            )
+            self.assertEqual(auto_def["hparams"]["lr"], 2e-4)
 
             # Write 4 synthetic tuning trials where trial 2 (default) is within 2% of trial 3
             trials = get_tuning_trials("flow_matching")
@@ -220,13 +236,13 @@ class TestGenerativeBenchmarkPreflight(unittest.TestCase):
             self.assertEqual(loaded_chosen["hparams"]["lr"], 2e-4)
 
             # Write-once final JSON enforcement (Section 6.2 Rule 2)
-            final_file = f_dir / "mnist_flow_matching_seed0.json"
+            final_file = f_dir / "mnist_flow_matching_seed42.json"
             payload = {
-                "run_id": "mnist_flow_matching_seed0_final",
+                "run_id": "mnist_flow_matching_seed42",
                 "dataset": "mnist",
                 "model": "flow_matching",
                 "mode": "final",
-                "seed": 0,
+                "seed": 42,
                 "hparams": loaded_chosen["hparams"],
                 "parameters": 1623169,
                 "train_steps": 30000,
@@ -244,19 +260,18 @@ class TestGenerativeBenchmarkPreflight(unittest.TestCase):
                 "rerun_reason": None,
             }
             write_results_json(final_file, payload)
+            write_results_json(run_paths["results_json"], payload)
             with self.assertRaises(FileExistsError):
                 write_results_json(final_file, payload)
 
-            # Meaningfulness rule check (Section 10.3)
-            m_yes = check_meaningful_difference([4.5, 4.7], [5.8, 6.1], sampling_noise_std=0.15)
-            self.assertTrue(m_yes["meaningful"])
-            m_no = check_meaningful_difference([4.5, 5.2], [5.0, 5.4], sampling_noise_std=0.15)
-            self.assertFalse(m_no["meaningful"])
-
             tables = build_comparison_tables_and_figures(
-                results_dir=tmp_path, figures_dir=fig_dir, show_plots=False
+                results_dir=tmp_path,
+                runs_dir=runs_dir,
+                figures_dir=fig_dir,
+                show_plots=False,
             )
             self.assertFalse(tables["T1"].empty)
+            self.assertIn("fid_train", tables["T1"].columns)
             self.assertFalse(tables["T5"].empty)
 
 

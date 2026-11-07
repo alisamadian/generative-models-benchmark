@@ -20,7 +20,7 @@ SPLIT_SEED: int = 1234
 VAL_SIZE: int = 5000
 TEST_SIZE: int = 10000
 
-TRAIN_SEEDS: Tuple[int, int] = (0, 1)
+# Single-seed design: user chooses SEED in notebook (default: 42)
 GEN_SEEDS: Tuple[int, int, int] = (100, 101, 102)
 
 BATCH_SIZE: int = 128
@@ -197,7 +197,6 @@ def protocol_dict() -> Dict[str, Any]:
         "SPLIT_SEED": SPLIT_SEED,
         "VAL_SIZE": VAL_SIZE,
         "TEST_SIZE": TEST_SIZE,
-        "TRAIN_SEEDS": list(TRAIN_SEEDS),
         "GEN_SEEDS": list(GEN_SEEDS),
         "BATCH_SIZE": BATCH_SIZE,
         "OPTIMIZER": {

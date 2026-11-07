@@ -319,6 +319,7 @@ def save_checkpoint(
 
     step_path = ckpt_dir / f"ckpt_step_{step:07d}.pt"
     _atomic_write_to_dest(step_path)
+    _atomic_write_to_dest(ckpt_dir / "latest.pt")
 
     if is_final:
         _atomic_write_to_dest(ckpt_dir / "final.pt")
@@ -352,7 +353,7 @@ def load_checkpoint(
 
     Follows Section 8:
     - If `ckpt_path_or_dir` is a directory, automatically finds the latest
-      `ckpt_step_*.pt` (or `final.pt`). Returns `None` if no checkpoint exists.
+      `ckpt_step_*.pt`, `latest.pt`, or `final.pt`. Returns `None` if no checkpoint exists.
     - Verifies `protocol_hash` and `config_hash`. A mismatch raises `RuntimeError`
       (never silently restarts).
     """
@@ -361,6 +362,8 @@ def load_checkpoint(
         step_ckpts = sorted(target.glob("ckpt_step_*.pt"))
         if step_ckpts:
             ckpt_file = step_ckpts[-1]
+        elif (target / "latest.pt").exists():
+            ckpt_file = target / "latest.pt"
         elif (target / "final.pt").exists():
             ckpt_file = target / "final.pt"
         else:
@@ -431,20 +434,21 @@ def mount_drive(base_subdir: str = "generative-benchmark") -> Dict[str, Path]:
 
     paths = {
         "root": root,
+        "runs": root / "runs",
         "checkpoints": root / "checkpoints",
         "fid_stats": root / "fid_stats",
         "samples": root / "samples",
         "logs": root / "logs",
         "in_colab": in_colab,  # type: ignore
     }
-    for key in ("root", "checkpoints", "fid_stats", "samples", "logs"):
+    for key in ("root", "runs", "checkpoints", "fid_stats", "samples", "logs"):
         paths[key].mkdir(parents=True, exist_ok=True)
 
-    # On Colab, automatically sync persistent splits/, results/, and figures/ from Drive
-    # into the local workspace so switching notebooks or sessions never loses progress.
+    # On Colab, automatically sync persistent setup_artifacts/, results/, and figures/ from Drive
+    # into the local workspace so switching notebooks or accounts never loses progress.
     if in_colab:
         for rel_dir in (
-            "splits",
+            "setup_artifacts",
             "results/tuning",
             "results/chosen",
             "results/final",
@@ -454,13 +458,58 @@ def mount_drive(base_subdir: str = "generative-benchmark") -> Dict[str, Path]:
             local_dir = Path.cwd() / rel_dir
             drive_dir.mkdir(parents=True, exist_ok=True)
             local_dir.mkdir(parents=True, exist_ok=True)
+            # Copy from Drive -> local if missing locally
             for src_file in drive_dir.glob("*"):
                 if src_file.is_file() and src_file.name != ".gitkeep":
                     dst_file = local_dir / src_file.name
                     if not dst_file.exists():
                         shutil.copy2(src_file, dst_file)
+            # Copy from local -> Drive if missing on Drive (e.g., committed setup_artifacts)
+            for src_file in local_dir.glob("*"):
+                if src_file.is_file() and src_file.name != ".gitkeep":
+                    dst_file = drive_dir / src_file.name
+                    if not dst_file.exists():
+                        shutil.copy2(src_file, dst_file)
 
     return paths
+
+
+def get_run_dir(
+    dataset: str,
+    model_name: str,
+    seed: int,
+    runs_root: Optional[Union[str, Path]] = None,
+) -> Dict[str, Path]:
+    """Create and return the self-contained portable run directory structure.
+
+    Folder layout:
+        <runs_root>/{dataset}_{model}_seed{seed}/
+        ├── checkpoints/   # latest.pt, best.pt, final.pt
+        ├── figures/       # training_curves.png, sample grids, memorisation grid
+        ├── logs/          # training.csv
+        ├── tuning/        # trial1..4.json, chosen.json
+        └── results.json   # final evaluation metrics
+    """
+    dataset = dataset.lower()
+    model_name = model_name.lower()
+    if runs_root is None:
+        drive_runs = Path("/content/drive/MyDrive/generative-benchmark/runs")
+        base = drive_runs if drive_runs.parent.exists() else Path("./runs")
+    else:
+        base = Path(runs_root)
+
+    run_dir = base / f"{dataset}_{model_name}_seed{seed}"
+    subdirs = {
+        "run_dir": run_dir,
+        "checkpoints": run_dir / "checkpoints",
+        "figures": run_dir / "figures",
+        "logs": run_dir / "logs",
+        "tuning": run_dir / "tuning",
+        "results_json": run_dir / "results.json",
+    }
+    for k in ("run_dir", "checkpoints", "figures", "logs", "tuning"):
+        subdirs[k].mkdir(parents=True, exist_ok=True)
+    return subdirs
 
 
 def write_results_json(

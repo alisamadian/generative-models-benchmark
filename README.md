@@ -35,13 +35,13 @@ All constants are defined in a single source of truth ([`common/config.py`](comm
 | :--- | :--- |
 | **Models** | Convolutional VAE (calibrated learned scalar $\sigma$); DDPM Diffusion ($\epsilon$-prediction, cosine $\bar{\alpha}_t$); Straight-Path Flow Matching (velocity $v = x_1 - x_0$ prediction). All unconditional. |
 | **Datasets & Splits** | **MNIST** ($55\text{k}$ train / $5\text{k}$ stratified val / $10\text{k}$ test; padded to $32\times 32$ for networks, cropped back to $28\times 28$ before every metric) and **CIFAR-10** ($45\text{k}$ train / $5\text{k}$ stratified val / $10\text{k}$ test, $32\times 32\times 3$). Fixed `SPLIT_SEED = 1234`. |
-| **Training Replicates** | Two independent training seeds (`TRAIN_SEEDS = (0, 1)`) per model and dataset. |
+| **Training Seed** | Single user-configurable seed per run (`SEED = 42` by default). |
 | **Shared Backbone** | Diffusion and Flow Matching instantiate the **exact same `UNet` class** ([`common/nets.py`](common/nets.py)) and share **bit-for-bit identical initial weights** for a given training seed. |
 | **Optimizer & Schedule** | `AdamW` ($\beta_1 = 0.9, \beta_2 = 0.999$, weight decay $0.0$), batch size $128$, global gradient norm clip $1.0$, linear warm-up ($500$ steps MNIST, $1{,}000$ steps CIFAR-10) followed by constant learning rate. |
 | **EMA** | Exponential Moving Average applied to all three models ($0.999$ MNIST, $0.9999$ CIFAR-10) with warm-up $\text{decay}_n = \min(\text{decay}, (1+n)/(10+n))$. All evaluations exclusively use EMA weights. |
-| **Equal-Effort Tuning** | Exactly **4 validation tuning trials** per method ($20\%$ of `TRAIN_STEPS`, seed $0$ only, selected on validation FID with $5{,}000$ samples at $\text{NFE}=50$; $2\%$ tie rule favors defaults). |
+| **Equal-Effort Tuning** | Optional automatic **4 validation tuning trials** per method ($20\%$ of `TRAIN_STEPS`, selected on validation FID with $5{,}000$ samples at $\text{NFE}=50$; $2\%$ tie rule favors defaults). Or start training immediately with pre-committed defaults. |
 | **Reference Rows** | **Ceiling:** $10{,}000$ real test images vs. the training reference. **Floor:** Full-covariance Gaussian fitted to flattened training pixels in PyTorch, sampled and clamped to $[-1, 1]$. |
-| **Statistical Rule** | Both seed values and their mean are reported per cell (no standard deviation across $2$ seeds). A gap between two methods is called **meaningful** only if their two seed intervals do not overlap **and** the mean difference exceeds the sampling-noise standard deviation from Block G (`GEN_SEEDS = (100, 101, 102)`). |
+| **Sampling-Noise Study** | Block G evaluates FID across $3$ generation seeds (`GEN_SEEDS = (100, 101, 102)`) at $N=50{,}000$ samples. |
 
 ### Pre-Committed Hyperparameter Tuning Grid (Section 9)
 
@@ -182,27 +182,22 @@ In accordance with **Section 1, Section 6.3, and Section 17** of the specificati
 
 ---
 
-## 9. Reproduction Instructions & Colab Disconnect Recovery
+## 9. Reproduction Instructions & Portable Run Folders
 
-Execute the notebooks in [`notebooks/`](notebooks/) in the exact order below:
+Every model notebook is **completely self-contained** — there is no separate setup notebook to run first:
 
-1. **`notebooks/00_setup_data_baselines.ipynb`**
-   - Creates and verifies `splits/mnist_split.json` and `splits/cifar10_split.json` (Check P1).
-   - Runs the V1–V14 data validation report (Check P2) and Pre-flight Checks P6–P13.
-   - Extracts and caches training-split Inception-v3 reference statistics on Google Drive (`MyDrive/generative-benchmark/fid_stats/`).
-   - Trains the `SmallResNet` evaluation classifier on the training split and reports test accuracy once.
-   - Computes the Ceiling and Floor reference rows (`results/final/{dataset}_baselines.json`, Checks P3 & P4).
-2. **Model Notebooks (`notebooks/{mnist,cifar10}_{vae,diffusion,flow_matching}.ipynb`)**
-   - **Step A (`MODE = "pilot"`):** Run the 200-step speed/memory check (P14) and 16-image tiny-batch overfit check (P5).
-   - **Step B (`MODE = "tune"`):** Runs the 4 pre-committed validation tuning trials (`results/tuning/*.json`), applies the 2% tie rule, and freezes `results/chosen/{dataset}_{model}.json`. Commit the frozen `results/chosen/*.json` files to Git before launching final runs.
-   - **Step C (`MODE = "final"`, `SEED = 0` then `SEED = 1`):** Always run after **`Runtime -> Restart session and run all`** so no stale state from tuning leaks into final evaluation (Section 6.2 Rule 12). Trains the model to completion, saves learning curves and fixed-seed sample grids (`seed = 777`), calls `evaluate_final()` once, and writes the write-once results JSON to `results/final/{dataset}_{model}_seed{seed}.json`.
+1. **Open any Model Notebook (`notebooks/{mnist,cifar10}_{vae,diffusion,flow_matching}.ipynb`)**
+   - **Auto-Setup (`auto_setup` in [`common/setup.py`](common/setup.py)):** Automatically loads pre-computed artifacts from `setup_artifacts/` (or computes and caches stratified train/val/test splits, lightweight FID $\mu/\Sigma$ reference statistics, and the evaluation classifier on first run).
+   - **Optional Step 1 (`MODE = "tune"`):** Automatically executes the 4 validation tuning trials, applies the 2% tie rule, and freezes the winning hyperparameters to `runs/{dataset}_{model}_seed{SEED}/tuning/chosen.json`.
+   - **Step 2 (`MODE = "train"`, `SEED = 42`):** Trains the model (using frozen tuned hyperparameters if available, or pre-committed defaults if tuning was skipped), saves learning curves and fixed-seed sample grids (`seed = 777`), calls `evaluate_final()` once, writes `results.json`, and exports a portable `.zip` archive of the run folder on Google Drive.
+2. **Transferring Runs Across Google Accounts**
+   - Each run lives in a single self-contained folder on Google Drive: `MyDrive/generative-benchmark/runs/{dataset}_{model}_seed{SEED}/` (plus `{dataset}_{model}_seed{SEED}.zip`).
+   - Simply copy or share the `.zip` file (or folder) into `MyDrive/generative-benchmark/runs/` on any account.
 3. **`notebooks/compare_results.ipynb`**
-   - Reads only the JSON files in `results/` (never trains or samples) and reproduces Tables T1–T6 and Figures F1–F6.
+   - Automatically unpacks any `.zip` archives in `runs/`, reads all `results.json` files without training or sampling, and generates a Quick Summary plus Tables T1–T6 and Figures F1–F6.
 
 ### Resuming After a Google Colab Disconnect
-Checkpoints are saved every `CKPT_INTERVAL` steps ($1{,}000$ on MNIST, $2{,}000$ on CIFAR-10) using a local-first atomic write-and-rename protocol (`save_checkpoint` in [`common/utils.py`](common/utils.py)), preserving model weights, EMA weights, optimizer state, `GradScaler` state, sampler permutation state, and all RNG states (`Python`, `NumPy`, `PyTorch CPU`, `PyTorch CUDA`). If a Colab session disconnects, simply reconnect, re-run the notebook cells from the top, and `train_model()` will automatically verify `protocol_hash()` and `config_hash()` and resume seamlessly from the latest checkpoint on Google Drive.
-
-> **Trained Checkpoints:** Model weights and cached Inception features are stored in `MyDrive/generative-benchmark/` during Colab execution and are never committed to Git (Section 0 Rule 7).
+Checkpoints are saved every `CKPT_INTERVAL` steps ($1{,}000$ on MNIST, $2{,}000$ on CIFAR-10) using a local-first atomic write-and-rename protocol (`save_checkpoint` in [`common/utils.py`](common/utils.py)) to `runs/{dataset}_{model}_seed{SEED}/checkpoints/latest.pt`, preserving model weights, EMA weights, optimizer state, `GradScaler` state, sampler permutation state, and all RNG states (`Python`, `NumPy`, `PyTorch CPU`, `PyTorch CUDA`). If a Colab session disconnects, simply reconnect and re-run the notebook cells—`train_model()` automatically resumes from the latest checkpoint.
 
 ---
 
@@ -216,33 +211,41 @@ generative-models-benchmark/
   common/
     __init__.py
     config.py                       # Shared protocol constants & deterministic protocol_hash()
-    data.py                         # Loading, stratified splits, test lock, GPU BatchSampler, V1-V14
+    data.py                         # Loading, stratified train/val/test splits, test lock, GPU BatchSampler
     nets.py                         # Shared UNet, parameter-matched VAE, SmallResNet, build_model()
     objectives.py                   # Calibrated VAE ELBO, DDPM loss, Flow Matching loss, schedules
     samplers.py                     # NFECounter, VAE, DDIM, Ancestral DDPM, DPM-Solver++ 2M, Euler, Heun
-    metrics.py                      # torch-fidelity Inception-v3, FID, KID, PR, DC, class balance, NN, evaluate_final()
-    runner.py                       # Unified training loop, tuning grid, freeze logic, T1-T6 & F1-F6 builders
+    metrics.py                      # Core metric math: Inception-v3 features, FID, KID, PR, DC, class balance, NN
+    evaluation.py                   # Evaluation blocks A-H, evaluate_final(), reference_stats(), baselines
+    classifier.py                   # SmallResNet evaluation classifier training & test evaluation
+    training.py                     # Unified training loop (train_model) & training curve plots
+    tuning.py                       # Pre-committed 4-trial hyperparameter search & freeze logic
+    tables.py                       # Comparison tables (T1-T6) & figures (F1-F6) built from JSON files
+    setup.py                        # One-call auto_setup() for splits, FID stats, and classifier
     preflight.py                    # Pre-flight verification suite (Checks P1-P14)
-    utils.py                        # Seeds, EMA with warm-up, atomic checkpoints, CSVLogger, GpuTimer
-  splits/
-    mnist_split.json                # Stratified indices & SHA-256 hash (SPLIT_SEED=1234)
+    utils.py                        # Seeds, EMA, atomic checkpoints, get_run_dir(), CSVLogger, GpuTimer
+  setup_artifacts/                  # Pre-computed splits, lightweight FID mu/sigma stats, classifiers
+    mnist_split.json
     cifar10_split.json
+  runs/                             # Self-contained portable run folders per (dataset, model, seed)
+    {dataset}_{model}_seed{SEED}/
+      checkpoints/                  # latest.pt, best.pt, final.pt
+      figures/                      # training_curves.png, sample grids, memorisation grid
+      logs/                         # training.csv
+      tuning/                       # trial1..4.json, chosen.json
+      results.json                  # Final evaluation metrics (Blocks B-H)
   notebooks/
-    00_setup_data_baselines.ipynb   # One-time setup: splits, V1-V14, P1-P13, FID stats, baselines, classifier
-    mnist_vae.ipynb                 # Identical 10-step structure across all 6 model notebooks
+    mnist_vae.ipynb                 # Identical 9-cell structure across all 6 model notebooks
     mnist_diffusion.ipynb
     mnist_flow_matching.ipynb
     cifar10_vae.ipynb
     cifar10_diffusion.ipynb
     cifar10_flow_matching.ipynb
-    compare_results.ipynb           # Pure JSON reader reproducing Tables T1-T6 & Figures F1-F6
+    compare_results.ipynb           # Pure JSON reader reproducing Quick Summary, Tables T1-T6 & Figures F1-F6
   tests/
     test_preflight.py               # Automated unit & pre-flight verification suite
-  results/
-    tuning/                         # One JSON per validation tuning trial
-    chosen/                         # Frozen chosen hyperparameters per dataset & model
-    final/                          # Write-once final evaluation JSON files (Appendix A schema)
-  figures/                          # Exported validation, pre-flight, and benchmark figures
+  results/                          # Legacy/mirrored JSON directory
+  figures/                          # Exported cross-model comparison figures (F1-F6)
 ```
 
 ---

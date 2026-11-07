@@ -268,7 +268,7 @@ def create_splits(
     }
 
     if save_path is None:
-        save_path = Path("splits") / f"{dataset}_split.json"
+        save_path = Path("setup_artifacts") / f"{dataset}_split.json"
     else:
         save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -285,12 +285,14 @@ def load_splits(
     """Load saved split JSON and assert its integrity and SHA-256 hash (Section 6.1)."""
     dataset = dataset.lower()
     if split_path is None:
-        split_path = Path("splits") / f"{dataset}_split.json"
+        primary = Path("setup_artifacts") / f"{dataset}_split.json"
+        fallback = Path("splits") / f"{dataset}_split.json"
+        split_path = primary if primary.exists() else fallback
     else:
         split_path = Path(split_path)
     if not split_path.exists():
         raise FileNotFoundError(
-            f"Split file '{split_path}' not found. Run 00_setup_data_baselines.ipynb "
+            f"Split file '{split_path}' not found. Run auto_setup('{dataset}') "
             f"or create_splits() first (Section 6.1)."
         )
     with open(split_path, mode="r", encoding="utf-8") as f:
