@@ -406,15 +406,17 @@ def load_checkpoint(
     return ckpt
 
 
-def mount_drive(base_subdir: str = "generative-benchmark") -> Dict[str, Path]:
-    """Mount Google Drive if running on Colab, and create the Section 3 directory tree.
+def mount_drive(base_subdir: str = "generative-models-benchmark") -> Dict[str, Path]:
+    """Mount Google Drive if running on Colab and return unified project directory paths.
 
-    Returns a dictionary of paths:
-    - `root`: `<drive_or_local>/generative-benchmark`
-    - `checkpoints`: `root / "checkpoints"`
-    - `fid_stats`: `root / "fid_stats"`
-    - `samples`: `root / "samples"`
-    - `logs`: `root / "logs"`
+    Everything lives inside a single structured folder on Google Drive:
+    `MyDrive/generative-models-benchmark/`
+    ├── common/            # Python modules
+    ├── notebooks/         # Jupyter notebooks (open directly from Drive)
+    ├── setup_artifacts/   # Splits, FID mu/sigma stats, classifiers, baselines
+    ├── runs/              # Portable per-run folders ({dataset}_{model}_seed{SEED}/)
+    ├── results/           # Aggregated JSON results
+    └── figures/           # Comparison plots
     """
     in_colab = False
     try:
@@ -430,23 +432,24 @@ def mount_drive(base_subdir: str = "generative-benchmark") -> Dict[str, Path]:
         if env_root:
             root = Path(env_root)
         else:
-            root = Path.cwd() / "drive_cache" / base_subdir
+            root = Path.cwd()
 
     paths = {
         "root": root,
         "runs": root / "runs",
-        "checkpoints": root / "checkpoints",
-        "fid_stats": root / "fid_stats",
-        "samples": root / "samples",
-        "logs": root / "logs",
+        "setup_artifacts": root / "setup_artifacts",
+        "checkpoints": root / "runs",
+        "fid_stats": root / "setup_artifacts",
+        "samples": root / "figures",
+        "logs": root / "runs",
+        "data_root": Path("/content/data") if in_colab else (Path.cwd() / "data"),
         "in_colab": in_colab,  # type: ignore
     }
-    for key in ("root", "runs", "checkpoints", "fid_stats", "samples", "logs"):
+    for key in ("root", "runs", "setup_artifacts", "samples", "data_root"):
         paths[key].mkdir(parents=True, exist_ok=True)
 
-    # On Colab, automatically sync persistent setup_artifacts/, results/, and figures/ from Drive
-    # into the local workspace so switching notebooks or accounts never loses progress.
-    if in_colab:
+    # If local working directory differs from Drive root, sync setup_artifacts, results, figures
+    if in_colab and root.resolve() != Path.cwd().resolve():
         for rel_dir in (
             "setup_artifacts",
             "results/tuning",
@@ -458,13 +461,11 @@ def mount_drive(base_subdir: str = "generative-benchmark") -> Dict[str, Path]:
             local_dir = Path.cwd() / rel_dir
             drive_dir.mkdir(parents=True, exist_ok=True)
             local_dir.mkdir(parents=True, exist_ok=True)
-            # Copy from Drive -> local if missing locally
             for src_file in drive_dir.glob("*"):
                 if src_file.is_file() and src_file.name != ".gitkeep":
                     dst_file = local_dir / src_file.name
                     if not dst_file.exists():
                         shutil.copy2(src_file, dst_file)
-            # Copy from local -> Drive if missing on Drive (e.g., committed setup_artifacts)
             for src_file in local_dir.glob("*"):
                 if src_file.is_file() and src_file.name != ".gitkeep":
                     dst_file = drive_dir / src_file.name
@@ -493,7 +494,7 @@ def get_run_dir(
     dataset = dataset.lower()
     model_name = model_name.lower()
     if runs_root is None:
-        drive_runs = Path("/content/drive/MyDrive/generative-benchmark/runs")
+        drive_runs = Path("/content/drive/MyDrive/generative-models-benchmark/runs")
         base = drive_runs if drive_runs.parent.exists() else Path("./runs")
     else:
         base = Path(runs_root)
@@ -552,14 +553,15 @@ def write_results_json(
         json.dump(payload, f, indent=2, sort_keys=False)
     os.replace(tmp_path, out_path)
 
-    # Mirror results JSON to Google Drive on Colab so it persists across sessions
-    drive_root = Path("/content/drive/MyDrive/generative-benchmark")
-    if drive_root.exists():
+    # Mirror results JSON to Google Drive on Colab if working directory differs from Drive root
+    drive_root = Path("/content/drive/MyDrive/generative-models-benchmark")
+    if drive_root.exists() and drive_root.resolve() != Path.cwd().resolve():
         try:
             rel = out_path.resolve().relative_to(Path.cwd().resolve())
             drive_dest = drive_root / rel
-            drive_dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(out_path, drive_dest)
+            if drive_dest.resolve() != out_path.resolve():
+                drive_dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(out_path, drive_dest)
         except ValueError:
             pass
 

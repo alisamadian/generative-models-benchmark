@@ -97,6 +97,13 @@ def auto_setup(
 
     # 3. Load or compute evaluation classifier
     clf_path = art_dir / f"{dataset}_classifier.pt"
+    # Check legacy Drive path from earlier 00_setup_data_baselines run if not yet in setup_artifacts/
+    legacy_clf = Path(f"/content/drive/MyDrive/generative-benchmark/checkpoints/{dataset}/classifier/best_classifier.pt")
+    if not clf_path.exists() and legacy_clf.exists():
+        import shutil
+        shutil.copy2(legacy_clf, clf_path)
+        print(f"[auto_setup:{dataset}] Migrated existing classifier from {legacy_clf} -> {clf_path}")
+
     from common.classifier import train_eval_classifier
 
     print(f"[auto_setup:{dataset}] Loading/training evaluation classifier...")
@@ -109,8 +116,37 @@ def auto_setup(
     )
     print(f"[auto_setup:{dataset}] Classifier ready: {clf_info}")
 
-    # 4. Load or compute FID reference stats (lightweight mu/sigma committed to repo)
+    # 4. Load or compute FID reference stats (lightweight mu/sigma in setup_artifacts/)
     fid_stats_path = art_dir / f"{dataset}_fid_stats.pt"
+    legacy_fid = Path(
+        f"/content/drive/MyDrive/generative-benchmark/fid_stats/{dataset}/ref_stats_{split_data['split_hash'][:16]}.pt"
+    )
+    legacy_base = Path(
+        f"/content/drive/MyDrive/generative-benchmark/results/final/{dataset}_baselines.json"
+    )
+    if not (art_dir / f"{dataset}_baselines.json").exists() and legacy_base.exists():
+        import shutil
+        shutil.copy2(legacy_base, art_dir / f"{dataset}_baselines.json")
+        print(f"[auto_setup:{dataset}] Migrated existing baselines -> {art_dir / f'{dataset}_baselines.json'}")
+
+    if not fid_stats_path.exists() and legacy_fid.exists():
+        print(f"[auto_setup:{dataset}] Migrating existing FID stats from {legacy_fid}...")
+        cached_ref = torch.load(legacy_fid, map_location="cpu", weights_only=False)
+        if cached_ref.get("split_hash") == split_data["split_hash"]:
+            save_payload = {
+                "dataset": dataset,
+                "split_hash": split_data["split_hash"],
+                "train_mu": cached_ref["train_mu"],
+                "train_sigma": cached_ref["train_sigma"],
+                "train_10k_mu": cached_ref["train_10k_mu"],
+                "train_10k_sigma": cached_ref["train_10k_sigma"],
+            }
+            if "val_mu" in cached_ref and "val_sigma" in cached_ref:
+                save_payload["val_mu"] = cached_ref["val_mu"]
+                save_payload["val_sigma"] = cached_ref["val_sigma"]
+            torch.save(save_payload, fid_stats_path)
+            print(f"[auto_setup:{dataset}] Saved lightweight FID stats to {fid_stats_path}")
+
     if fid_stats_path.exists():
         print(f"[auto_setup:{dataset}] Loading pre-computed FID stats from {fid_stats_path}")
         ref_stats = torch.load(fid_stats_path, map_location="cpu", weights_only=False)
