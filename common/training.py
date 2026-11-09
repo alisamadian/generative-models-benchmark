@@ -390,6 +390,85 @@ def train_model(
     }
 
 
+def load_trained_result(
+    dataset: str,
+    model_name: str,
+    seed: int,
+    hparams: Dict[str, Any],
+    ckpt_dir: Union[str, Path],
+    max_steps: Optional[int] = None,
+    device: Optional[Union[str, torch.device]] = None,
+) -> Dict[str, Any]:
+    """Load an already-trained checkpoint from `ckpt_dir` without running the training loop.
+
+    Why: Allows Cells 7, 8, and 9 in the notebooks to run standalone right after
+    Cells 1–4 when training has already finished in a previous session.
+    """
+    from common.config import TRAIN_STEPS
+
+    dataset = dataset.lower()
+    model_name = model_name.lower()
+    dev = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    eff_max_steps = int(max_steps or TRAIN_STEPS[dataset])
+
+    model = build_model(dataset, model_name, seed=seed, hparams=hparams).to(dev)
+    ema = EMA(model, decay=EMA_DECAY[dataset])
+
+    ckpt_dir_path = Path(ckpt_dir)
+    loaded = load_checkpoint(
+        ckpt_dir_path,
+        model=model,
+        ema=ema,
+        optimizer=None,
+        scaler=None,
+        expected_cfg_hash=None,
+        expected_proto_hash=None,
+        restore_rng=False,
+        map_location=dev,
+    )
+    if loaded is None:
+        raise FileNotFoundError(
+            f"No saved checkpoint found in {ckpt_dir_path}. Run Cell 6 (Train Mode) first."
+        )
+
+    best_ckpt_path = ckpt_dir_path / "best.pt"
+    if model_name == "vae" and best_ckpt_path.exists():
+        best_ckpt = torch.load(best_ckpt_path, map_location=dev, weights_only=False)
+        model.load_state_dict(best_ckpt["model"])
+        ema.load_state_dict(best_ckpt["ema"])
+
+    extra = loaded.get("extra_state", {})
+    step_val = int(loaded.get("step", eff_max_steps))
+    cum_seconds = float(extra.get("cumulative_seconds", 0.0))
+    val_loss_history = list(extra.get("val_loss_history", []))
+    val_fid_history = list(extra.get("val_fid_history", []))
+    train_loss_history = list(extra.get("train_loss_history", []))
+    best_val_loss = float(extra.get("best_val_loss", float("inf")))
+    best_val_step = int(extra.get("best_val_step", step_val))
+    early_stopped = bool(extra.get("early_stopped", False))
+    avg_it_per_sec = step_val / max(1e-6, cum_seconds)
+
+    print(
+        f"[Loaded Checkpoint] {dataset}/{model_name} (seed={seed}) at step {step_val} from {ckpt_dir_path}"
+    )
+    return {
+        "model": model,
+        "ema": ema,
+        "ema_model": ema.ema_model,
+        "final_step": step_val,
+        "best_val_step": best_val_step,
+        "best_val_loss": best_val_loss,
+        "early_stopped": early_stopped,
+        "train_seconds": cum_seconds,
+        "it_per_sec": avg_it_per_sec,
+        "train_loss_history": train_loss_history,
+        "val_loss_history": val_loss_history,
+        "val_fid_history": val_fid_history,
+        "config_hash": str(loaded.get("config_hash", "")),
+        "checkpoint_path": str(ckpt_dir_path / "final.pt"),
+    }
+
+
 def plot_training_curves(
     train_result: Dict[str, Any],
     dataset: str,

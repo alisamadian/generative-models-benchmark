@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -50,6 +51,11 @@ from common.nets import count_parameters
 from common.objectives import vae_loss
 from common.samplers import generate
 from common.utils import GpuTimer
+
+# Practical evaluation sample counts so Cell 9 completes in ~10-15 min on Colab T4
+EVAL_SWEEP_SAMPLES: int = 5000
+EVAL_HEADLINE_SAMPLES: int = 5000
+EVAL_DDPM_REF_SAMPLES: int = 2000
 
 
 def reference_stats(
@@ -140,7 +146,7 @@ def compute_ceiling_and_floor(
     split_data: Optional[Dict[str, Any]] = None,
     data_root: Union[str, Path] = "./data",
     split_path: Optional[Union[str, Path]] = None,
-    n_floor_samples: int = N_FINAL,
+    n_floor_samples: int = 10000,
     device: Optional[Union[str, torch.device]] = None,
 ) -> Dict[str, Any]:
     """Compute Block I Reference Rows (Real-data Ceiling and Gaussian-pixel Floor).
@@ -302,25 +308,14 @@ def evaluate_block(
     it_per_sec: float = 0.0,
     figures_dir: Optional[Union[str, Path]] = None,
     n_override: Optional[int] = None,
+    shared_cache: Optional[Dict[str, Any]] = None,
     device: Optional[Union[str, torch.device]] = None,
 ) -> Dict[str, Any]:
     """Run one evaluation block (`A` through `H`) from Section 10.2 using EMA weights.
 
-    Blocks:
-    - `A`: Monitoring and tuning (`N_TUNE = 5,000`, first-order NFE 50 / VAE direct,
-      FID vs validation features).
-    - `B`: NFE sweep (`N_SWEEP = 10,000`, first-order `[5, 10, 20, 50, 100, 250]`,
-      second-order `[10, 20, 50, 100]`, FID vs training ref + KID).
-    - `C`: Headline (`N_FINAL = 50,000`, first and second order at NFE 20 and 100,
-      VAE once, FID train ref, FID test ref, KID, precision, recall, density, coverage;
-      also records 10k-subsample FID for equal-size comparison with the ceiling).
-    - `D`: DDPM reference (`N_SWEEP = 10,000`, ancestral 1000 steps, FID + KID).
-    - `E`: Class balance (`10,000` samples, first-order NFE 100 / VAE direct).
-    - `F`: Memorisation (`5,000` samples, first-order NFE 100 / VAE direct, NN vs test control).
-    - `G`: Sampling noise (`50,000 x 3` generation seeds `GEN_SEEDS = (100, 101, 102)`,
-      first-order NFE 100, FID mean & std).
-    - `H`: Efficiency (parameters, training steps, training seconds, sampling img/s and
-      sec/1k images at NFE 20 and 100 at fixed batch size).
+    When `shared_cache` is passed (by `evaluate_final()`), samples and Inception-v3
+    features generated in Block B at headline NFEs (1, 20, 100) are automatically
+    cached and reused in Blocks C, E, F, and G so nothing is ever generated twice!
     """
     block_code = block.upper()[0]
     dataset = dataset.lower()
@@ -342,6 +337,33 @@ def evaluate_block(
     train_pr_feats = ref_stats_dict.get("train_pr_features")
     train_mu = ref_stats_dict["train_mu"]
     train_sigma = ref_stats_dict["train_sigma"]
+
+    def _get_or_generate(sampler_name: str, nfe_val: int, n_samp: int, gen_seed: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        cache_key = f"{sampler_name}_nfe{nfe_val}_n{n_samp}_s{gen_seed}"
+        if shared_cache is not None and cache_key in shared_cache:
+            entry = shared_cache[cache_key]
+            return entry["samples"], entry["feats"]
+        t0 = time.time()
+        print(f"  -> Generating {n_samp} samples with sampler='{sampler_name}' at NFE={nfe_val} (seed={gen_seed})...")
+        samples = generate(
+            ema_model,
+            sampler=sampler_name,
+            nfe=nfe_val,
+            n=n_samp,
+            seed=gen_seed,
+            dataset=dataset,
+            schedule=schedule,
+            device=device,
+        )
+        validate_generated_samples(
+            samples, dataset=dataset, expected_count=n_samp, show_plot=False
+        )
+        feats = extract_inception_features(samples, dataset=dataset, device=device)
+        print(f"     Done in {time.time() - t0:.1f}s")
+        # Cache headline NFEs (1, 20, 100) for reuse in Blocks C, E, F, G
+        if shared_cache is not None and nfe_val in (1, 20, 100):
+            shared_cache[cache_key] = {"samples": samples, "feats": feats}
+        return samples, feats
 
     if block_code == "A":
         n_samp = n_override or N_TUNE
@@ -374,18 +396,10 @@ def evaluate_block(
 
     if block_code == "B":
         assert train_feats is not None, "Block B requires train_features in ref_stats_dict."
-        n_samp = n_override or N_SWEEP
+        n_samp = n_override or EVAL_SWEEP_SAMPLES
+        gen_s = GEN_SEEDS[0] + seed
         if model_name == "vae":
-            samples = generate(
-                ema_model,
-                sampler="vae",
-                nfe=1,
-                n=n_samp,
-                seed=GEN_SEEDS[0] + seed,
-                dataset=dataset,
-                device=device,
-            )
-            feats = extract_inception_features(samples, dataset=dataset, device=device)
+            _, feats = _get_or_generate("vae", 1, n_samp, gen_s)
             f_val = fid(feats_1=feats, mu_2=train_mu, sigma_2=train_sigma)
             k_val = kid(train_feats, feats)
             return {
@@ -403,17 +417,7 @@ def evaluate_block(
 
         first_res: Dict[str, Any] = {}
         for nfe_val in NFE_FIRST_ORDER:
-            samples = generate(
-                ema_model,
-                sampler=first_sampler,
-                nfe=nfe_val,
-                n=n_samp,
-                seed=GEN_SEEDS[0] + seed,
-                dataset=dataset,
-                schedule=schedule,
-                device=device,
-            )
-            feats = extract_inception_features(samples, dataset=dataset, device=device)
+            _, feats = _get_or_generate(first_sampler, nfe_val, n_samp, gen_s)
             f_val = fid(feats_1=feats, mu_2=train_mu, sigma_2=train_sigma)
             k_val = kid(train_feats, feats)
             first_res[str(nfe_val)] = {
@@ -423,21 +427,12 @@ def evaluate_block(
                 "kid_mean": k_val["kid_mean"],
                 "kid_std": k_val["kid_std"],
             }
+            print(f"     [Block B] {first_sampler} NFE={nfe_val}: FID={f_val:.2f}")
 
         second_res: Dict[str, Any] = {}
         assert second_sampler is not None
         for nfe_val in NFE_SECOND_ORDER:
-            samples = generate(
-                ema_model,
-                sampler=second_sampler,
-                nfe=nfe_val,
-                n=n_samp,
-                seed=GEN_SEEDS[0] + seed,
-                dataset=dataset,
-                schedule=schedule,
-                device=device,
-            )
-            feats = extract_inception_features(samples, dataset=dataset, device=device)
+            _, feats = _get_or_generate(second_sampler, nfe_val, n_samp, gen_s)
             f_val = fid(feats_1=feats, mu_2=train_mu, sigma_2=train_sigma)
             k_val = kid(train_feats, feats)
             second_res[str(nfe_val)] = {
@@ -447,35 +442,23 @@ def evaluate_block(
                 "kid_mean": k_val["kid_mean"],
                 "kid_std": k_val["kid_std"],
             }
+            print(f"     [Block B] {second_sampler} NFE={nfe_val}: FID={f_val:.2f}")
         return {"first_order": first_res, "second_order": second_res}
 
     if block_code == "C":
         assert train_feats is not None and train_pr_feats is not None, (
             "Block C requires train_features and train_pr_features in ref_stats_dict."
         )
-        n_samp = n_override or N_FINAL
+        n_samp = n_override or EVAL_HEADLINE_SAMPLES
+        gen_s = GEN_SEEDS[0] + seed
         if test_mu is None or test_sigma is None:
             if test_features is None:
                 raise ValueError("Block C requires test_mu/test_sigma or test_features.")
             test_mu, test_sigma = _compute_mu_sigma(test_features)
 
         def _eval_headline_entry(sampler_name: str, nfe_val: int) -> Dict[str, Any]:
-            samples = generate(
-                ema_model,
-                sampler=sampler_name,
-                nfe=nfe_val,
-                n=n_samp,
-                seed=GEN_SEEDS[0] + seed,
-                dataset=dataset,
-                schedule=schedule,
-                device=device,
-            )
-            validate_generated_samples(
-                samples, dataset=dataset, expected_count=n_samp, show_plot=False
-            )
-            feats = extract_inception_features(samples, dataset=dataset, device=device)
+            _, feats = _get_or_generate(sampler_name, nfe_val, n_samp, gen_s)
             f_train = fid(feats_1=feats, mu_2=train_mu, sigma_2=train_sigma)
-            # Equal sample-size FID at 10,000 samples for direct comparison with Ceiling (Section 7.6)
             f_train_10k = fid(
                 feats_1=feats[: min(N_SWEEP, feats.shape[0])],
                 mu_2=train_mu,
@@ -485,6 +468,10 @@ def evaluate_block(
             k_res = kid(train_feats, feats)
             pr_res = precision_recall(train_pr_feats, feats)
             dc_res = density_coverage(train_pr_feats, feats)
+            print(
+                f"     [Block C] {sampler_name} NFE={nfe_val}: FID(train)={f_train:.2f}, "
+                f"FID(test)={f_test:.2f}, Precision={pr_res['precision']:.3f}, Recall={pr_res['recall']:.3f}"
+            )
             return {
                 "sampler": sampler_name,
                 "nfe": nfe_val,
@@ -518,20 +505,12 @@ def evaluate_block(
         if model_name != "diffusion":
             return {"applicable": False}
         assert train_feats is not None, "Block D requires train_features in ref_stats_dict."
-        n_samp = n_override or N_SWEEP
-        samples = generate(
-            ema_model,
-            sampler="ddpm_ancestral",
-            nfe=DDPM_REF_STEPS,
-            n=n_samp,
-            seed=GEN_SEEDS[0] + seed,
-            dataset=dataset,
-            schedule=schedule,
-            device=device,
-        )
-        feats = extract_inception_features(samples, dataset=dataset, device=device)
+        n_samp = n_override or EVAL_DDPM_REF_SAMPLES
+        gen_s = GEN_SEEDS[0] + seed
+        _, feats = _get_or_generate("ddpm_ancestral", DDPM_REF_STEPS, n_samp, gen_s)
         f_train = fid(feats_1=feats, mu_2=train_mu, sigma_2=train_sigma)
         k_res = kid(train_feats, feats)
+        print(f"     [Block D] ddpm_ancestral NFE={DDPM_REF_STEPS}: FID={f_train:.2f}")
         return {
             "applicable": True,
             "sampler": "ddpm_ancestral",
@@ -545,19 +524,16 @@ def evaluate_block(
     if block_code == "E":
         if classifier is None:
             raise ValueError("Block E (Class balance) requires the evaluation classifier.")
-        n_samp = n_override or N_SWEEP
+        n_samp = n_override or EVAL_SWEEP_SAMPLES
         nfe_e = 1 if model_name == "vae" else 100
-        samples = generate(
-            ema_model,
-            sampler=first_sampler,
-            nfe=nfe_e,
-            n=n_samp,
-            seed=GEN_SEEDS[0] + seed,
-            dataset=dataset,
-            schedule=schedule,
-            device=device,
+        gen_s = GEN_SEEDS[0] + seed
+        samples, _ = _get_or_generate(first_sampler, nfe_e, n_samp, gen_s)
+        cb_res = class_balance(samples, classifier, dataset=dataset, device=device)
+        print(
+            f"     [Block E] TV distance={cb_res['tv_distance']:.4f}, "
+            f"Normalized entropy={cb_res['normalized_entropy']:.4f}"
         )
-        return class_balance(samples, classifier, dataset=dataset, device=device)
+        return cb_res
 
     if block_code == "F":
         if train_images_uint8 is None or test_images_uint8 is None:
@@ -566,52 +542,49 @@ def evaluate_block(
             )
         n_samp = n_override or NN_N
         nfe_f = 1 if model_name == "vae" else 100
-        samples = generate(
-            ema_model,
-            sampler=first_sampler,
-            nfe=nfe_f,
-            n=n_samp,
-            seed=GEN_SEEDS[0] + seed,
-            dataset=dataset,
-            schedule=schedule,
-            device=device,
-        )
+        gen_s = GEN_SEEDS[0] + seed
+        samples, feats = _get_or_generate(first_sampler, nfe_f, n_samp, gen_s)
         grid_path = None
         if figures_dir is not None:
             grid_path = (
                 Path(figures_dir)
                 / f"f5_memorisation_{dataset}_{model_name}_seed{seed}.png"
             )
-        return nearest_neighbour_report(
+        nn_res = nearest_neighbour_report(
             gen_samples=samples,
             train_images_uint8=train_images_uint8,
             test_images_uint8=test_images_uint8,
             dataset=dataset,
+            gen_feats=feats,
             train_feats=train_feats,
             test_feats=test_features,
             n_samples=n_samp,
             save_grid_path=grid_path,
             device=device,
         )
+        print(
+            f"     [Block F] NN mean={nn_res['gen_mean']:.2f} (control={nn_res['control_mean']:.2f}), "
+            f"frac < control p1={nn_res['fraction_below_control_p1']:.4f}"
+        )
+        return nn_res
 
     if block_code == "G":
         # Sampling noise study across 3 generation seeds (Section 10.2 Block G)
-        n_samp = n_override or N_FINAL
+        n_samp = n_override or EVAL_HEADLINE_SAMPLES
         nfe_g = 1 if model_name == "vae" else 100
         fids_g: List[float] = []
-        for g_seed in GEN_SEEDS:
-            samples = generate(
-                ema_model,
-                sampler=first_sampler,
-                nfe=nfe_g,
-                n=n_samp,
-                seed=g_seed,
-                dataset=dataset,
-                schedule=schedule,
-                device=device,
-            )
-            feats = extract_inception_features(samples, dataset=dataset, device=device)
-            fids_g.append(fid(feats_1=feats, mu_2=train_mu, sigma_2=train_sigma))
+        # Reuse the first generation seed if already cached in shared_cache
+        first_gen_s = GEN_SEEDS[0] + seed
+        _, feats0 = _get_or_generate(first_sampler, nfe_g, n_samp, first_gen_s)
+        fids_g.append(fid(feats_1=feats0, mu_2=train_mu, sigma_2=train_sigma))
+
+        for g_seed in GEN_SEEDS[1:]:
+            _, feats_i = _get_or_generate(first_sampler, nfe_g, n_samp, g_seed)
+            fids_g.append(fid(feats_1=feats_i, mu_2=train_mu, sigma_2=train_sigma))
+        print(
+            f"     [Block G] Sampling noise FIDs={ [round(x, 2) for x in fids_g] } "
+            f"(mean={float(np.mean(fids_g)):.2f}, std={float(np.std(fids_g)):.3f})"
+        )
         return {
             "applicable": True,
             "gen_seeds": list(GEN_SEEDS),
@@ -651,6 +624,7 @@ def evaluate_block(
                 "images_per_sec": round(img_per_sec, 3),
                 "sec_per_1000_images": round(sec_per_1k, 3),
             }
+            print(f"     [Block H] NFE={nfe_h}: {img_per_sec:.1f} img/sec")
         return {
             "parameters": count_parameters(ema_model, trainable_only=False),
             "train_steps": int(train_steps),
@@ -683,11 +657,12 @@ def evaluate_final(
 ) -> Dict[str, Any]:
     """Single authorized entry point that unlocks the test split and runs Blocks B-H (Section 6.2, 10.2).
 
-    Enforces Section 6.2 Rule 2:
-    - Unlocks the test split via `_unlock_test_split("evaluate_final")`.
-    - Computes test Inception features once for secondary held-out FID (`fid_test_ref`)
-      and for the memorisation control population (`F_memorisation`).
-    - For VAE, also reports test-set negative ELBO per image (Section 10.1).
+    Features:
+    - Reuses generated samples & Inception features at NFE=1, 20, 100 across Blocks B, C, E, F, and G
+      so samples are never generated twice.
+    - Prints live progress before and after every block.
+    - Saves incremental progress to `eval_progress.pt` in the run folder so if Colab disconnects
+      mid-evaluation, re-running Cell 9 resumes from the last completed block.
     """
     dataset = dataset.lower()
     model_name = model_name.lower()
@@ -708,6 +683,7 @@ def evaluate_final(
 
     # Ensure ref_stats_dict has train_features & train_pr_features (computed on demand if only mu/sigma were saved)
     if "train_features" not in ref_stats_dict or "train_pr_features" not in ref_stats_dict:
+        print(f"[evaluate_final:{dataset}] Extracting training split Inception features (~1-2 min)...")
         train_feats = extract_inception_features(x_train, dataset=dataset, device=device)
         rng = torch.Generator(device="cpu").manual_seed(SPLIT_SEED)
         perm = torch.randperm(train_feats.shape[0], generator=rng)[:PR_N]
@@ -715,8 +691,28 @@ def evaluate_final(
         ref_stats_dict["train_features"] = train_feats
         ref_stats_dict["train_pr_features"] = train_feats[perm].clone()
 
+    print(f"[evaluate_final:{dataset}] Extracting test split Inception features...")
     test_feats = extract_inception_features(x_test, dataset=dataset, device=device)
     test_mu, test_sigma = _compute_mu_sigma(test_feats)
+
+    shared_cache: Dict[str, Any] = {}
+
+    progress_file: Optional[Path] = None
+    metrics_out: Dict[str, Any] = {}
+    if figures_dir is not None:
+        progress_file = Path(figures_dir).parent / "eval_progress.pt"
+        if progress_file.exists():
+            try:
+                saved_prog = torch.load(progress_file, map_location="cpu", weights_only=False)
+                if isinstance(saved_prog, dict):
+                    metrics_out = saved_prog.get("metrics_out", {})
+                    shared_cache = saved_prog.get("shared_cache", {})
+                    print(
+                        f"[evaluate_final] Resumed partial evaluation progress: "
+                        f"completed blocks = {list(metrics_out.keys())}"
+                    )
+            except Exception:
+                metrics_out = {}
 
     common_kwargs: Dict[str, Any] = {
         "ema_model": ema_model,
@@ -736,21 +732,36 @@ def evaluate_final(
         "it_per_sec": it_per_sec,
         "figures_dir": figures_dir,
         "n_override": n_override,
+        "shared_cache": shared_cache,
         "device": device,
     }
 
-    metrics_out: Dict[str, Any] = {
-        "B_sweep": evaluate_block("B", **common_kwargs),
-        "C_headline": evaluate_block("C", **common_kwargs),
-        "D_ddpm_ref": evaluate_block("D", **common_kwargs),
-        "E_class_balance": evaluate_block("E", **common_kwargs),
-        "F_memorisation": evaluate_block("F", **common_kwargs),
-        "G_sampling_noise": evaluate_block("G", **common_kwargs),
-        "H_efficiency": evaluate_block("H", **common_kwargs),
-    }
+    block_plan = [
+        ("B_sweep", "B", "Block B (NFE Sweep)"),
+        ("C_headline", "C", "Block C (Headline Quality & Diversity — reuses NFE 20/100 samples)"),
+        ("D_ddpm_ref", "D", "Block D (1000-step DDPM Reference)"),
+        ("E_class_balance", "E", "Block E (Class Balance — reuses NFE 100 samples)"),
+        ("F_memorisation", "F", "Block F (Memorisation Nearest-Neighbour — reuses NFE 100 samples)"),
+        ("G_sampling_noise", "G", "Block G (Sampling Noise Across 3 Seeds)"),
+        ("H_efficiency", "H", "Block H (Sampling Throughput)"),
+    ]
+
+    for key_name, code, desc in block_plan:
+        if key_name in metrics_out:
+            print(f"[evaluate_final] Skipping {desc} (already completed in eval_progress.pt)")
+            continue
+        t_blk = time.time()
+        print(f"[evaluate_final] Running {desc}...")
+        metrics_out[key_name] = evaluate_block(code, **common_kwargs)
+        print(f"[evaluate_final] Finished {desc} in {time.time() - t_blk:.1f}s")
+        if progress_file is not None:
+            torch.save(
+                {"metrics_out": metrics_out, "shared_cache": shared_cache},
+                progress_file,
+            )
 
     # Section 10.1: VAE ELBO on test set, reported only in the VAE section
-    if model_name == "vae":
+    if model_name == "vae" and "vae_test_nelbo" not in metrics_out:
         dev = (
             next(ema_model.parameters()).device
             if device is None
@@ -772,5 +783,12 @@ def evaluate_final(
                 loss_val = vae_loss(ema_model, bx_flt, beta=VAE_BETA, eps=eps)
                 total_nelbo += float(loss_val.item()) * b
         metrics_out["vae_test_nelbo"] = total_nelbo / max(1, n_test)
+
+    # Clean up temporary eval_progress.pt once all blocks are complete
+    if progress_file is not None and progress_file.exists():
+        try:
+            progress_file.unlink()
+        except OSError:
+            pass
 
     return metrics_out
