@@ -1,0 +1,111 @@
+{
+  "run_id": "mnist_baselines",
+  "dataset": "mnist",
+  "model": "baselines",
+  "split_hash": "82acf47cab3f7b90dd2ce200db9fa4a2c9629b793ca48611d643a496fa2625be",
+  "metrics": {
+    "ceiling": {
+      "n_samples": 10000,
+      "fid_train_ref": 1.0330971614882358,
+      "fid_train_10k_ref": 1.541599667623057,
+      "fid_test_ref": 0.0,
+      "kid_mean": 0.00011912098653989567,
+      "kid_std": 0.00015721518156830782,
+      "precision": 0.8122000098228455,
+      "recall": 0.7888000011444092,
+      "density": 1.00308,
+      "coverage": 0.9574999809265137,
+      "class_balance": {
+        "n_samples": 10000,
+        "counts": [
+          983,
+          1139,
+          1030,
+          1014,
+          986,
+          890,
+          952,
+          1028,
+          972,
+          1006
+        ],
+        "histogram": [
+          0.0983,
+          0.1139,
+          0.103,
+          0.1014,
+          0.0986,
+          0.089,
+          0.0952,
+          0.1028,
+          0.0972,
+          0.1006
+        ],
+        "tv_distance": 0.021700000000000004,
+        "normalized_entropy": 0.9992058323540998,
+        "mean_max_softmax": 0.9976143836975098
+      }
+    },
+    "floor": {
+      "n_samples": 50000,
+      "fid_train_ref": 201.6714672879794,
+      "fid_train_ref_10k": 202.22604395030436,
+      "fid_test_ref": 202.21861949046092,
+      "kid_mean": 0.23569992035269632,
+      "kid_std": 0.001839515666691578,
+      "precision": 0.0,
+      "recall": 0.0,
+      "density": 0.0,
+      "coverage": 0.0,
+      "class_balance": {
+        "n_samples": 10000,
+        "counts": [
+          21,
+          5,
+          26,
+          166,
+          1009,
+          65,
+          2,
+          21,
+          8666,
+          19
+        ],
+        "histogram": [
+          0.0021,
+          0.0005,
+          0.0026,
+          0.0166,
+          0.1009,
+          0.0065,
+          0.0002,
+          0.0021,
+          0.8666,
+          0.0019
+        ],
+        "tv_distance": 0.7675000000000001,
+        "normalized_entropy": 0.22368440350173913,
+        "mean_max_softmax": 0.949034571647644
+      }
+    },
+    "white_noise_fid": 403.0597284930145,
+    "sample_size_bias_p4": {
+      "ceiling_fid_vs_full_train": 1.0330971614882358,
+      "ceiling_fid_vs_10k_train": 1.541599667623057,
+      "floor_fid_n_final": 201.6714672879794,
+      "floor_fid_10k": 202.22604395030436
+    }
+  },
+  "protocol_hash": "94289b0c3cdd530220a23a341981a9492408de73c86f49acd13ccd56da2d092e",
+  "library_versions": {
+    "python": "3.13.16",
+    "torch": "2.14.1+cu130",
+    "torchvision": "0.29.1+cu130",
+    "torch_fidelity": "0.4.0",
+    "numpy": "2.4.6",
+    "pandas": "2.2.3",
+    "matplotlib": "3.10.0",
+    "tqdm": "4.67.3"
+  },
+  "timestamp": "2026-11-08T20:29:24.842759+00:00"
+}

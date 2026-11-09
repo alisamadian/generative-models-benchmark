@@ -1,0 +1,24 @@
+{
+  "dataset": "mnist",
+  "model": "diffusion",
+  "protocol_hash": "94289b0c3cdd530220a23a341981a9492408de73c86f49acd13ccd56da2d092e",
+  "winning_trial_index": 2,
+  "hparams": {
+    "lr": 0.0002,
+    "schedule": "cosine"
+  },
+  "winning_val_fid": null,
+  "selection_reason": "precommitted_default_hparams",
+  "all_trials": [],
+  "library_versions": {
+    "python": "3.13.16",
+    "torch": "2.14.1+cu130",
+    "torchvision": "0.29.1+cu130",
+    "torch_fidelity": "0.4.0",
+    "numpy": "2.4.6",
+    "pandas": "2.2.3",
+    "matplotlib": "3.10.0",
+    "tqdm": "4.67.3"
+  },
+  "timestamp": "2026-11-08T20:10:28.965078+00:00"
+}
